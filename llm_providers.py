@@ -5,8 +5,10 @@ Camada de abstração agnóstica de modelo de IA (Seção 11 do Documento de
 Contexto): o Sophia não tem motor próprio, o usuário escolhe o provedor
 (OpenAI, Anthropic, Google ou Groq) e fornece sua própria chave (BYOK).
 
-Cada provedor implementa `generate(system_prompt, user_prompt, use_web_search)`
-e retorna texto bruto (idealmente um JSON, validado depois em analysis.py).
+Cada provedor implementa `generate(system_prompt, user_prompt, use_web_search, expect_json)`
+e retorna texto bruto (JSON quando expect_json=True, validado depois em analysis.py;
+texto livre quando expect_json=False, usado no chat de refinamento e na geração
+de minutas de peças processuais).
 
 Chaves de API NUNCA são logadas nem persistidas em disco por este módulo —
 isso é responsabilidade da camada de armazenamento (ver app.py /
@@ -36,8 +38,15 @@ class BaseLLMProvider(ABC):
     def default_model(self) -> str: ...
 
     @abstractmethod
-    def generate(self, system_prompt: str, user_prompt: str, use_web_search: bool = True) -> str:
-        """Retorna a resposta em texto (esperado: um único objeto JSON)."""
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_web_search: bool = True,
+        expect_json: bool = True,
+    ) -> str:
+        """Retorna a resposta em texto (esperado: um único objeto JSON quando
+        expect_json=True; texto livre quando expect_json=False)."""
         ...
 
 
@@ -45,7 +54,13 @@ class OpenAIProvider(BaseLLMProvider):
     name = "openai"
     default_model = "gpt-4.1"
 
-    def generate(self, system_prompt: str, user_prompt: str, use_web_search: bool = True) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_web_search: bool = True,
+        expect_json: bool = True,
+    ) -> str:
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -53,6 +68,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         client = OpenAI(api_key=self.api_key)
         tools = [{"type": "web_search_preview"}] if use_web_search else []
+
         try:
             resp = client.responses.create(
                 model=self.model,
@@ -69,7 +85,13 @@ class AnthropicProvider(BaseLLMProvider):
     name = "anthropic"
     default_model = "claude-sonnet-4-6"
 
-    def generate(self, system_prompt: str, user_prompt: str, use_web_search: bool = True) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_web_search: bool = True,
+        expect_json: bool = True,
+    ) -> str:
         try:
             import anthropic
         except ImportError as e:
@@ -77,6 +99,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         client = anthropic.Anthropic(api_key=self.api_key)
         tools = [{"type": "web_search_20250305", "name": "web_search"}] if use_web_search else []
+
         try:
             resp = client.messages.create(
                 model=self.model,
@@ -95,7 +118,13 @@ class GoogleProvider(BaseLLMProvider):
     name = "google"
     default_model = "gemini-3.5-flash"
 
-    def generate(self, system_prompt: str, user_prompt: str, use_web_search: bool = True) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_web_search: bool = True,
+        expect_json: bool = True,
+    ) -> str:
         try:
             from google import genai
             from google.genai import types
@@ -104,6 +133,7 @@ class GoogleProvider(BaseLLMProvider):
 
         client = genai.Client(api_key=self.api_key)
         tools = [types.Tool(google_search=types.GoogleSearch())] if use_web_search else []
+
         try:
             resp = client.models.generate_content(
                 model=self.model,
@@ -120,15 +150,22 @@ class GoogleProvider(BaseLLMProvider):
 
 class GroqProvider(BaseLLMProvider):
     name = "groq"
-    default_model = "llama-3.3-70b-versatile"
+    default_model = "openai/gpt-oss-120b"
 
-    def generate(self, system_prompt: str, user_prompt: str, use_web_search: bool = True) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        use_web_search: bool = True,
+        expect_json: bool = True,
+    ) -> str:
         try:
             from groq import Groq
         except ImportError:
             # Fallback para usar o pacote 'openai' com o endpoint do Groq
             try:
                 from openai import OpenAI
+
                 client = OpenAI(
                     base_url="https://api.groq.com/openai/v1",
                     api_key=self.api_key,
@@ -140,14 +177,20 @@ class GroqProvider(BaseLLMProvider):
 
         try:
             # Nota: Groq não possui busca web nativa no Chat Completions básico
-            resp = client.chat.completions.create(
+            kwargs = dict(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
             )
+            # Só força JSON quando o chamador realmente espera JSON (análise
+            # inicial). No chat de refinamento e na geração de minutas a
+            # resposta deve ser texto livre — forçar json_object ali quebrava
+            # essas duas features.
+            if expect_json:
+                kwargs["response_format"] = {"type": "json_object"}
+            resp = client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"Falha ao chamar o Groq: {e}") from e

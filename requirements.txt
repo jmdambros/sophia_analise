@@ -2,7 +2,7 @@ flask>=3.0
 python-docx>=1.1
 pypdf>=4.0
 cryptography>=42.0
-
+groq>=0.11  # necessário se o usuário escolher "groq" (ou use apenas 'openai' com o base_url do Groq)
 # Instale só o(s) SDK(s) do(s) provedor(es) de IA que for usar:
 openai>=1.40        # necessário se o usuário escolher "openai"
 anthropic>=0.34      # necessário se o usuário escolher "anthropic"
