@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sophia — Análise Preliminar de Caso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- Barra lateral: casos em análise -->
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M20 4 L20 30" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M10 10 L30 10" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M10 10 L5 20 L15 20 Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+        <path d="M30 10 L25 20 L35 20 Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+        <path d="M13 34 L27 34" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M20 30 L20 34" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <span class="brand-name">Sophia</span>
+    </div>
+
+    <button class="btn-new-case" id="btnNovoCaso">+ Novo caso</button>
+
+    <div class="sidebar-search">
+      <input type="search" id="buscaCaso" placeholder="Buscar caso…">
+    </div>
+
+    <div class="case-list" id="listaCasos">
+      <p class="case-list-empty">Nenhum caso ainda. Comece criando um novo caso ao lado.</p>
+    </div>
+  </aside>
+
+  <!-- Área principal -->
+  <main class="main">
+
+    <header class="main-header">
+      <div>
+        <p class="eyebrow-plain" id="tituloCasoAtual">Selecione ou crie um caso</p>
+        <h1 id="subtituloCasoAtual">Análise Preliminar de Caso</h1>
+      </div>
+      <div class="header-actions">
+        <button class="btn-secondary" id="btnConfigIA">Configurar IA</button>
+        <button class="btn-secondary" id="btnGerarPeca" disabled>Gerar peça processual</button>
+      </div>
+    </header>
+
+    <!-- Fluxograma -->
+    <section class="flow-area" id="flowArea">
+      <div class="flow-placeholder" id="flowPlaceholder">
+        <p>Envie a transcrição da entrevista para gerar o mapa do caso — teses, temas do STF/STJ, jurisprudência, perguntas e necessidades adicionais aparecerão aqui, cada um com sua fonte.</p>
+      </div>
+      <div class="flow-canvas" id="flowCanvas" hidden></div>
+    </section>
+
+    <!-- Interação com a IA jurídica -->
+    <section class="chat-area">
+      <div class="chat-log" id="chatLog"></div>
+      <div class="chat-suggestions" id="chatSuggestions">
+        <button class="chip" data-msg="Faça um resumo do relato do cliente.">Resumo do Relato do Cliente</button>
+        <button class="chip" data-msg="Liste os documentos que ainda estão faltando para este caso.">Lista de Documentos Faltantes</button>
+        <button class="chip" data-msg="Refaça a análise considerando também jurisprudência mais recente.">Refazer análise</button>
+      </div>
+      <form class="chat-input" id="chatForm">
+        <input type="text" id="chatInput" placeholder="Escreva sua pergunta ou peça uma nova análise para a IA…" autocomplete="off" disabled>
+        <button type="submit" id="chatSend" disabled>Enviar</button>
+      </form>
+    </section>
+
+  </main>
+</div>
+
+<!-- Modal: novo caso / nova análise -->
+<dialog id="modalNovoCaso">
+  <form id="formNovoCaso" class="modal-form">
+    <h2>Nova análise de caso</h2>
+    <p class="modal-hint">Envie a transcrição já gerada (fase 1 do Sophia) e, se quiser, documentos do processo já em posse.</p>
+
+    <label>Nome do caso
+      <input type="text" name="nome_caso" placeholder="Ex: Processo Cível 123/2024 — João x Empresa Z" required>
+    </label>
+
+    <label>Transcrição da entrevista (.docx)
+      <input type="file" name="transcricao_docx" accept=".docx" required>
+    </label>
+
+    <label>Documentos anexados do processo (opcional)
+      <input type="file" name="documentos" accept=".docx,.pdf,.txt" multiple>
+    </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="usar_busca_web" checked>
+      Permitir que a IA pesquise na web para atualizar jurisprudência
+    </label>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="btnCancelarNovoCaso">Cancelar</button>
+      <button type="submit" class="btn-primary" id="btnEnviarAnalise">Analisar caso</button>
+    </div>
+    <p class="modal-status" id="modalStatus"></p>
+  </form>
+</dialog>
+
+<!-- Modal: configuração do motor de IA (BYOK) -->
+<dialog id="modalConfigIA">
+  <form class="modal-form" id="formConfigIA">
+    <h2>Motor de IA</h2>
+    <p class="modal-hint">Sophia não tem IA própria — escolha o provedor e use sua própria chave de API. A chave fica só nesta sessão do navegador.</p>
+
+    <label>Provedor
+      <select name="provider" id="selectProvider">
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="openai">OpenAI (GPT)</option>
+        <option value="google">Google (Gemini)</option>
+      </select>
+    </label>
+
+    <label>Chave de API
+      <input type="password" name="api_key" id="inputApiKey" placeholder="sk-…" required>
+    </label>
+
+    <label>Modelo (opcional)
+      <input type="text" name="model" id="inputModel" placeholder="Deixe em branco para usar o padrão">
+    </label>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="btnCancelarConfigIA">Cancelar</button>
+      <button type="submit" class="btn-primary">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Modal: geração de peça processual -->
+<dialog id="modalPeca">
+  <form class="modal-form" id="formPeca">
+    <h2>Gerar rascunho de peça</h2>
+    <p class="modal-hint">Reaproveita o contexto já consolidado do caso. Sempre gera uma minuta — revise antes de protocolar.</p>
+
+    <label>Tipo de peça
+      <select name="tipo_peca">
+        <option value="petição inicial">Petição inicial</option>
+        <option value="contestação">Contestação</option>
+        <option value="réplica">Réplica</option>
+        <option value="recurso de apelação">Recurso de apelação</option>
+        <option value="agravo">Agravo</option>
+        <option value="embargos de declaração">Embargos de declaração</option>
+      </select>
+    </label>
+
+    <label>Instruções adicionais (opcional)
+      <textarea name="instrucoes_extra" rows="3" placeholder="Ex: focar na tese de dano moral, pedir tutela de urgência…"></textarea>
+    </label>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="btnCancelarPeca">Cancelar</button>
+      <button type="submit" class="btn-primary">Gerar minuta</button>
+    </div>
+    <p class="modal-status" id="pecaStatus"></p>
+  </form>
+  <pre class="peca-output" id="pecaOutput" hidden></pre>
+</dialog>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
