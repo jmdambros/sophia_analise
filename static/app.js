@@ -331,12 +331,15 @@ el.btnGerarPeca.addEventListener("click", () => {
 });
 document.getElementById("btnCancelarPeca").addEventListener("click", () => el.modalPeca.close());
 
+el.pecaDownloadArea = document.getElementById("pecaDownloadArea");
+
 el.formPeca.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const fd = new FormData(el.formPeca);
   el.pecaStatus.className = "modal-status";
   el.pecaStatus.textContent = "Gerando minuta…";
   el.pecaOutput.hidden = true;
+  el.pecaDownloadArea.innerHTML = "";
 
   try {
     const res = await fetch(`/api/gerar-peca/${state.caseId}`, {
@@ -353,11 +356,14 @@ el.formPeca.addEventListener("submit", async (ev) => {
     el.pecaStatus.textContent = data.aviso;
     el.pecaOutput.hidden = false;
     el.pecaOutput.textContent = data.rascunho;
+    if (data.download_url) {
+      el.pecaDownloadArea.innerHTML =
+        `<a class="btn-primary" style="display:inline-block;margin-top:12px" href="${data.download_url}" download>Baixar minuta (.docx)</a>`;
+    }
   } catch (e) {
     el.pecaStatus.className = "modal-status erro";
     el.pecaStatus.textContent = e.message;
   }
 });
-
 // ---------------------------------------------------------------------
 carregarCasos();

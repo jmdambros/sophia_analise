@@ -12,7 +12,7 @@ existe como protótipo separado). Este serviço:
      adicionais — todos com fonte.
   4. Serve o fluxograma resultante e o chat de refinamento (Seção 6.4).
   5. Gera rascunhos de peças processuais a partir do contexto consolidado
-     (Seção 6.5).
+     (Seção 6.5), já como um arquivo .docx formatado para download.
 
 Rodar localmente:
     pip install -r requirements.txt
@@ -22,13 +22,15 @@ Rodar localmente:
 
 from __future__ import annotations
 
+import os
 import uuid
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import storage
 from analysis import LLMError, run_case_analysis, run_chat_turn, run_document_draft
 from document_utils import build_untrusted_context_block, extract_text, extract_text_from_docx
+from docx_builder import build_docx_from_draft
 from llm_providers import get_provider
 
 app = Flask(__name__)
@@ -36,6 +38,10 @@ storage.init_db()
 
 MAX_UPLOAD_MB = 25
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+# Onde as minutas .docx geradas ficam salvas para download (Seção 6.5).
+GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_pecas")
+os.makedirs(GENERATED_DIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------------
@@ -79,7 +85,7 @@ def api_analisar():
     """
     multipart/form-data esperado:
       - nome_caso: str
-      - provider: 'openai' | 'anthropic' | 'google'
+      - provider: 'openai' | 'anthropic' | 'google' | 'groq'
       - api_key: str (chave do próprio usuário, BYOK)
       - model: str opcional
       - usar_busca_web: 'true' | 'false'
@@ -124,8 +130,6 @@ def api_analisar():
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
 
-    # Persiste o caso (transcrição, docs, análise) — Seção 11, "estrutura de
-    # dados por caso" — e sinaliza documentos suspeitos ao advogado.
     existing = storage.get_case(case_id)
     if not existing:
         storage.create_case(case_id, nome_caso)
@@ -220,7 +224,28 @@ def api_gerar_peca(case_id: str):
     except LLMError as e:
         return jsonify({"erro": str(e)}), 502
 
-    return jsonify({"rascunho": rascunho, "aviso": "Minuta gerada por IA — revise antes de protocolar."})
+    docx_bytes = build_docx_from_draft(tipo_peca, rascunho)
+    filename = f"{case_id}_{uuid.uuid4().hex[:8]}.docx"
+    with open(os.path.join(GENERATED_DIR, filename), "wb") as f:
+        f.write(docx_bytes)
+
+    return jsonify(
+        {
+            "rascunho": rascunho,
+            "aviso": "Minuta gerada por IA — revise antes de protocolar.",
+            "download_url": f"/api/gerar-peca/download/{filename}",
+        }
+    )
+
+
+@app.get("/api/gerar-peca/download/<filename>")
+def api_gerar_peca_download(filename: str):
+    return send_from_directory(
+        GENERATED_DIR,
+        filename,
+        as_attachment=True,
+        download_name="minuta.docx",
+    )
 
 
 if __name__ == "__main__":
