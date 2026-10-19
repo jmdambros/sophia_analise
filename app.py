@@ -119,7 +119,7 @@ def api_analisar():
         documentos_bloco = build_untrusted_context_block(documentos_extraidos)
 
         provider = get_provider(provider_name, api_key, model=model)
-        analise = run_case_analysis(
+        analise, fonte_url_descartadas = run_case_analysis(
             provider,
             transcricao=transcricao_texto,
             documentos_bloco=documentos_bloco,
@@ -151,6 +151,7 @@ def api_analisar():
             "analise": analise,
             "documentos_meta": docs_meta,
             "alerta_seguranca": any(d.suspicious for d in documentos_extraidos),
+            "alerta_fonte_nao_confirmada": bool(fonte_url_descartadas),
         }
     )
 

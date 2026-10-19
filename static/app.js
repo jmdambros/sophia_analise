@@ -99,6 +99,21 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+// Só considera "link de fonte" seguro para renderizar como <a href> uma
+// URL que existe de fato E é http/https — nunca javascript:, data:, etc.
+// Isso é uma segunda camada de defesa: o backend (analysis.py) já só deixa
+// passar fonte_url que bateu com uma citação real da busca web, mas o
+// frontend não deve confiar cegamente em nenhum dado vindo de fora.
+function isSafeHttpUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------
 // Novo caso / análise
 // ---------------------------------------------------------------------
@@ -145,6 +160,12 @@ el.formNovoCaso.addEventListener("submit", async (ev) => {
       alert(
         "Atenção: um dos documentos anexados contém trechos que se parecem com instruções direcionadas a uma IA (possível conteúdo malicioso). " +
         "O sistema tratou esse conteúdo apenas como dado do caso, mas revise o documento original com cuidado."
+      );
+    }
+    if (data.alerta_fonte_nao_confirmada) {
+      alert(
+        "Atenção: uma ou mais fontes citadas pela IA não puderam ser confirmadas por um link direto de busca web e foram exibidas sem link " +
+        "(campo 'fonte' com texto ainda pode conter a referência — trate como não verificado)."
       );
     }
 
@@ -200,20 +221,28 @@ function categoriaColuna(titulo, itens, renderFn) {
   return col;
 }
 
-function nodeMeta(relevanciaOuStatus, fonte) {
-  return `<div class="node-meta"><span class="relevancia">${relevanciaOuStatus || ""}</span><span class="fonte">${escapeHtml(fonte || "não verificado")}</span></div>`;
+// fonteUrl é opcional: só renderiza o link "Ver fonte ↗" quando existir e
+// for uma URL http(s) real (ver isSafeHttpUrl). Quando não houver link,
+// mostra só o texto da fonte (ou "não verificado"), sem sugerir uma URL
+// que não existe. .fonte e o link ficam agrupados em .fonte-wrap para não
+// quebrar o layout de duas colunas (space-between) de .node-meta.
+function nodeMeta(relevanciaOuStatus, fonte, fonteUrl) {
+  const linkHtml = isSafeHttpUrl(fonteUrl)
+    ? `<a class="fonte-link" href="${escapeHtml(fonteUrl)}" target="_blank" rel="noopener noreferrer">Ver fonte ↗</a>`
+    : "";
+  return `<div class="node-meta"><span class="relevancia">${relevanciaOuStatus || ""}</span><span class="fonte-wrap"><span class="fonte">${escapeHtml(fonte || "não verificado")}</span>${linkHtml}</span></div>`;
 }
 
 function renderTese(t) {
   const d = document.createElement("div");
   d.className = "node-card tese";
-  d.innerHTML = `<div class="node-title">${escapeHtml(t.titulo)}</div><div class="node-desc">${escapeHtml(t.descricao)}</div>${nodeMeta("Relevância: " + (t.relevancia || "—"), t.fonte)}`;
+  d.innerHTML = `<div class="node-title">${escapeHtml(t.titulo)}</div><div class="node-desc">${escapeHtml(t.descricao)}</div>${nodeMeta("Relevância: " + (t.relevancia || "—"), t.fonte, t.fonte_url)}`;
   return d;
 }
 function renderTema(t) {
   const d = document.createElement("div");
   d.className = "node-card tema";
-  d.innerHTML = `<div class="node-title">${escapeHtml(t.titulo)}</div><div class="node-desc">${escapeHtml(t.descricao)}</div>${nodeMeta("Relevância: " + (t.relevancia || "—"), t.fonte)}`;
+  d.innerHTML = `<div class="node-title">${escapeHtml(t.titulo)}</div><div class="node-desc">${escapeHtml(t.descricao)}</div>${nodeMeta("Relevância: " + (t.relevancia || "—"), t.fonte, t.fonte_url)}`;
   return d;
 }
 function renderJurisprudencia(j) {
@@ -226,7 +255,7 @@ function renderJurisprudencia(j) {
   d.innerHTML = `<div class="node-title">${escapeHtml(j.titulo)}${tag}</div>` +
     `<div class="node-desc">${escapeHtml(j.resumo || "")}</div>` +
     `<div class="node-desc" style="font-size:0.78rem">${escapeHtml(j.tribunal || "")}${j.processo ? " · " + escapeHtml(j.processo) : ""}${j.data ? " · " + escapeHtml(j.data) : ""}</div>` +
-    nodeMeta("", j.fonte);
+    nodeMeta("", j.fonte, j.fonte_url);
   return d;
 }
 function renderPergunta(p) {

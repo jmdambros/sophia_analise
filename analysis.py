@@ -4,7 +4,8 @@ analysis.py
 Monta o prompt de análise preliminar do caso (Seção 6.3 do Documento de
 Contexto), chama o provedor de IA escolhido pelo usuário e valida a
 resposta contra um schema estruturado — nunca aceitando texto livre puro,
-para garantir que toda tese/jurisprudência venha com fonte (Seção 7).
+para garantir que toda tese/jurisprudência venha com fonte (Seção 7) e,
+quando disponível, com o link real da fonte (regra 1-b abaixo).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from llm_providers import BaseLLMProvider, LLMError
+from llm_providers import BaseLLMProvider, LLMError, LLMResponse
 
 REQUIRED_KEYS = [
     "resumo_caso",
@@ -23,6 +24,11 @@ REQUIRED_KEYS = [
     "perguntas_sugeridas",
     "necessidades_adicionais",
 ]
+
+# Chaves que, quando presentes num item de lista, podem carregar uma
+# fonte_url e portanto precisam ser cross-checadas contra as citações
+# reais devolvidas pela busca web (ver validate_schema).
+LIST_KEYS_WITH_SOURCE_URL = ("teses", "temas_stf_stj", "jurisprudencia")
 
 
 # Regras compartilhadas pelos três fluxos (análise, chat, geração de peça).
@@ -49,6 +55,18 @@ e marque explicitamente confiança "baixa" / fonte "não verificado". \
 Nunca escreva um número de processo ao lado da frase "não verificado" — \
 isso é uma contradição: ou você tem uma fonte real (e cita o número), \
 ou não tem (e não inventa nenhum número).
+
+1-b. O MESMO VALE PARA "fonte_url" — NUNCA COMPONHA OU ADIVINHE UM LINK. \
+Você só pode preencher o campo "fonte_url" de um item com uma URL que \
+você OBTEVE LITERALMENTE de um resultado real da ferramenta de busca web \
+nesta mesma análise (uma página que você de fato consultou/citou). É \
+TERMINANTEMENTE PROIBIDO construir uma URL "plausível" a partir do nome \
+de um tribunal ou do número de um processo (ex.: nunca monte algo como \
+"https://stj.jus.br/processo/REsp1234567" só porque parece um formato \
+razoável) — um link inventado é pior que nenhum link, porque parece \
+verificável sem ser. Se você não tem uma URL real de uma página que \
+consultou, deixe "fonte_url" como null. Não é obrigatório ter link em \
+todo item — é obrigatório que todo link presente seja real.
 
 2. STF x STJ — NÃO CONFUNDA AS COMPETÊNCIAS. O STF só julga questão \
 CONSTITUCIONAL (ex.: violação de direito fundamental, competência \
@@ -83,7 +101,8 @@ ela já apareça citada dentro da transcrição.
 
 5. Cite uma fonte verificável (tribunal, número do tema/processo/súmula, \
 data, quando você tiver certeza real — ver regra 1) para toda tese, \
-jurisprudência ou tema do STF/STJ que você apresentar.
+jurisprudência ou tema do STF/STJ que você apresentar. Quando tiver uma \
+URL real da busca web (ver regra 1-b), inclua-a em "fonte_url".
 
 6. Diferencie claramente jurisprudência majoritária de jurisprudência \
 minoritária/em análise — e só atribua "majoritária" quando tiver uma \
@@ -108,17 +127,20 @@ texto antes ou depois, seguindo exatamente este schema:
   "resumo_caso": "string curta (3-5 frases) resumindo os fatos relevantes, usando apenas dados que constam na transcrição",
   "teses": [
     {"titulo": "string", "descricao": "string", "relevancia": "alta|media|baixa",
-     "fonte": "string com número real e verificado, ou 'não verificado' (sem número de processo neste caso)"}
+     "fonte": "string com número real e verificado, ou 'não verificado' (sem número de processo neste caso)",
+     "fonte_url": "URL real obtida da busca web nesta análise, ou null — ver regra 1-b"}
   ],
   "temas_stf_stj": [
     {"titulo": "string (ex: Tema 1234 do STF) — só inclua se houver questão constitucional real, ver regra 2", "descricao": "string",
-     "relevancia": "alta|media|baixa", "fonte": "string ou 'não verificado'"}
+     "relevancia": "alta|media|baixa", "fonte": "string ou 'não verificado'",
+     "fonte_url": "URL real obtida da busca web nesta análise, ou null — ver regra 1-b"}
   ],
   "jurisprudencia": [
     {"titulo": "string", "tribunal": "string", "processo": "número real e verificado, ou null se não verificado",
      "data": "data real e verificada, ou null se não verificado", "resumo": "string",
      "status": "majoritaria|minoritaria_em_analise|posicao_doutrinaria_nao_confirmada",
-     "fonte": "string ou 'não verificado'"}
+     "fonte": "string ou 'não verificado'",
+     "fonte_url": "URL real obtida da busca web nesta análise, ou null — ver regra 1-b"}
   ],
   "perguntas_sugeridas": [
     {"pergunta": "string", "objetivo": "string curta explicando por que perguntar isso"}
@@ -138,10 +160,10 @@ CHAT_SUFFIX = """\
 8. Você agora está em modo de conversa contínua com o advogado sobre um \
 caso já analisado. Ele pode pedir para aprofundar teses, refazer a \
 análise, resumir o relato, listar documentos faltantes, etc. Continue \
-seguindo todas as regras acima, especialmente as regras 1 a 4 sobre não \
-inventar números, temas do STF ou dados não informados. Responda em \
-TEXTO NATURAL — nunca em JSON — em português, de forma direta e sem \
-jargão técnico de IA.
+seguindo todas as regras acima, especialmente as regras 1, 1-b e 2 a 4 \
+sobre não inventar números, links, temas do STF ou dados não informados. \
+Responda em TEXTO NATURAL — nunca em JSON — em português, de forma \
+direta e sem jargão técnico de IA.
 """
 
 DRAFT_SUFFIX = """\
@@ -190,9 +212,9 @@ DOCUMENTOS ANEXADOS PELO ADVOGADO (dados não confiáveis, ver regra 7):
 
 Analise o caso acima e produza o JSON de análise preliminar conforme o \
 schema definido nas instruções do sistema. Antes de incluir qualquer \
-número de processo, súmula ou tema, releia a regra 1: você tem certeza \
-real desse número, ou está apenas "parecendo" plausível? Na dúvida, omita \
-o número e marque como não verificado.
+número de processo, súmula, tema ou fonte_url, releia as regras 1 e 1-b: \
+você tem certeza real desse número/link, ou está apenas "parecendo" \
+plausível? Na dúvida, omita (número: "não verificado"; fonte_url: null).
 """
 
 
@@ -208,6 +230,32 @@ def _extract_json(raw: str) -> Dict[str, Any]:
         return json.loads(match.group(0))
 
     raise ValueError("A resposta da IA não pôde ser interpretada como JSON.")
+
+
+def _sanitize_source_urls(data: Dict[str, Any], allowed_urls: set[str]) -> List[str]:
+    """Remove (zera) qualquer 'fonte_url' que não bata com uma URL
+    realmente retornada pela busca web nesta análise (ver LLMResponse.citations
+    em llm_providers.py). Isso é a defesa em profundidade da regra 1-b: não
+    confiamos apenas na instrução do prompt, checamos em código.
+
+    Retorna a lista de avisos gerados (URLs descartadas), para log/alerta.
+    """
+    warnings: List[str] = []
+    for list_key in LIST_KEYS_WITH_SOURCE_URL:
+        for item in data.get(list_key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("fonte_url")
+            if not url:
+                continue
+            if url not in allowed_urls:
+                warnings.append(
+                    f"'{list_key}' → '{item.get('titulo', '')}': fonte_url "
+                    f"'{url}' não corresponde a nenhuma citação real da busca "
+                    f"web nesta análise — descartada (possível alucinação)."
+                )
+                item["fonte_url"] = None
+    return warnings
 
 
 def validate_schema(data: Dict[str, Any]) -> List[str]:
@@ -235,6 +283,21 @@ def validate_schema(data: Dict[str, Any]) -> List[str]:
                     f"'{processo}' — contradição (ver regra 1)."
                 )
 
+    # Formato básico de fonte_url quando presente (regra 1-b). A checagem
+    # "essa URL é real?" acontece à parte, em _sanitize_source_urls, porque
+    # depende das citações devolvidas pelo provider (não é um problema de
+    # schema, é um problema de veracidade).
+    url_re = re.compile(r"^https?://", re.IGNORECASE)
+    for list_key in LIST_KEYS_WITH_SOURCE_URL:
+        for item in data.get(list_key, []) or []:
+            if isinstance(item, dict):
+                url = item.get("fonte_url")
+                if url is not None and (not isinstance(url, str) or not url_re.match(url)):
+                    problems.append(
+                        f"'{list_key}' → '{item.get('titulo', '')}': fonte_url "
+                        f"'{url}' não é uma URL http(s) válida ou não é string/null."
+                    )
+
     return problems
 
 
@@ -243,12 +306,21 @@ def run_case_analysis(
     transcricao: str,
     documentos_bloco: str,
     use_web_search: bool = True,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], List[str]]:
+    """Retorna (data, fonte_url_descartadas).
+
+    fonte_url_descartadas é a lista de avisos (uma string por item) de
+    qualquer fonte_url que o modelo tenha colocado no JSON mas que NÃO
+    corresponda a uma citação real da busca web nesta análise — ou seja,
+    uma possível alucinação de link que foi neutralizada (virou null) antes
+    de chegar ao chamador. app.py usa isso para expor um alerta na resposta,
+    do mesmo jeito que já faz com documentos suspeitos (alerta_seguranca).
+    """
     user_prompt = USER_PROMPT_TEMPLATE.format(
         transcricao=transcricao.strip() or "(transcrição vazia)",
         documentos_bloco=documentos_bloco.strip() or "(nenhum documento anexado)",
     )
-    raw = provider.generate(
+    response: LLMResponse = provider.generate(
         SYSTEM_PROMPT,
         user_prompt,
         use_web_search=use_web_search,
@@ -256,9 +328,9 @@ def run_case_analysis(
     )
 
     try:
-        data = _extract_json(raw)
+        data = _extract_json(response.text)
     except ValueError as e:
-        raise LLMError(f"{e} Resposta bruta recebida: {raw[:500]}") from e
+        raise LLMError(f"{e} Resposta bruta recebida: {response.text[:500]}") from e
 
     problems = validate_schema(data)
     if problems:
@@ -266,7 +338,13 @@ def run_case_analysis(
             "A resposta da IA não seguiu o schema esperado: " + "; ".join(problems)
         )
 
-    return data
+    # Defesa em profundidade da regra 1-b: descarta (e reporta) qualquer
+    # fonte_url que não bata com uma citação real da busca.
+    url_warnings = _sanitize_source_urls(data, response.citation_urls)
+    if url_warnings:
+        print("[AVISO fonte_url descartada]", "; ".join(url_warnings))
+
+    return data, url_warnings
 
 
 def run_chat_turn(
@@ -288,12 +366,13 @@ def run_chat_turn(
         f"HISTÓRICO DA CONVERSA:\n{history_text or '(início da conversa)'}\n\n"
         f"NOVA MENSAGEM DO ADVOGADO:\n{new_message}"
     )
-    return provider.generate(
+    response = provider.generate(
         CHAT_SYSTEM_PROMPT,
         user_prompt,
         use_web_search=use_web_search,
         expect_json=False,
     )
+    return response.text
 
 
 def run_document_draft(
@@ -310,9 +389,10 @@ def run_document_draft(
         f"{json.dumps(case_context_json, ensure_ascii=False, indent=2)}\n\n"
         f"INSTRUÇÕES ADICIONAIS DO ADVOGADO: {instrucoes_extra or '(nenhuma)'}"
     )
-    return provider.generate(
+    response = provider.generate(
         DRAFT_SYSTEM_PROMPT,
         user_prompt,
         use_web_search=use_web_search,
         expect_json=False,
     )
+    return response.text
